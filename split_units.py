@@ -1,12 +1,15 @@
 """
-Split each publisher's 합본 MD into 8 unit MDs by line boundaries.
+교과서 합본 MD를 8개 대단원 MD로 분할.
+
+두 가지 분할 모드 지원:
+- "line": 단원이 시작되는 줄 번호 (예: "이 단원에서는" 패턴이 잡히는 출판사)
+- "page": PyMuPDF 페이지 마커(`<!-- PAGE N -->`)를 이용한 페이지 번호 (TOC가 있는 출판사용)
 """
-import os
+import os, re
 
 BASE = r"C:\Users\choij\agent\textbook"
-OUT = os.path.join(BASE, "split")
 
-UNIT_TITLES = [
+GRADE3_TITLES = [
     "화학 반응의 규칙과 에너지 변화",
     "기권과 날씨",
     "운동과 에너지",
@@ -17,41 +20,87 @@ UNIT_TITLES = [
     "과학기술과 인류 문명",
 ]
 
-PUBLISHERS = {
-    "동아":   {"file": "2025 개정 중학교 3학년 과학_동아.md",
-              "starts": [2, 719, 1550, 2248, 2991, 3848, 4491, 5036]},
-    "미래엔": {"file": "2025 개정 중학교 3학년 과학_미래엔.md",
-              "starts": [17, 950, 1870, 2886, 3687, 4624, 5305, 5914]},
-    "비상":   {"file": "2025 개정 중학교 3학년 과학_비상.md",
-              "starts": [3, 911, 1892, 2592, 3460, 4345, 4947, 5742]},
-    "천재":   {"file": "2025 개정 중학교 3학년 과학_천재.md",
-              "starts": [7, 878, 1866, 2594, 3256, 4303, 4766, 5346]},
-}
+GRADE2_TITLES = [
+    "물질의 특성",
+    "지권의 변화",
+    "빛과 파동",
+    "물질의 구성",
+    "식물과 에너지",
+    "동물과 에너지",
+    "전기와 자기",
+    "별과 우주",
+]
+
+# (학년 폴더, 출판사, MD 파일명, 모드, boundary, 단원 제목 리스트)
+JOBS = [
+    # 중3 (모두 line 모드)
+    ("2015 개정 중학교 3학년", "동아",   "2015 개정 중학교 3학년 과학_동아.md",   "line", [2, 719, 1550, 2247, 2990, 3847, 4490, 5035], GRADE3_TITLES),
+    ("2015 개정 중학교 3학년", "미래엔", "2015 개정 중학교 3학년 과학_미래엔.md", "line", [17, 950, 1870, 2886, 3687, 4624, 5305, 5914], GRADE3_TITLES),
+    ("2015 개정 중학교 3학년", "비상",   "2015 개정 중학교 3학년 과학_비상.md",   "line", [3, 911, 1892, 2592, 3460, 4345, 4947, 5742], GRADE3_TITLES),
+    ("2015 개정 중학교 3학년", "천재",   "2015 개정 중학교 3학년 과학_천재.md",   "line", [7, 878, 1866, 2594, 3256, 4303, 4766, 5346], GRADE3_TITLES),
+
+    # 중2 - line 모드 ("이 단원에서는" 패턴)
+    ("2022 개정 중학교 2학년", "동아",     "동아/(동아출판) 22개정_중학_과학2_교과서.md",   "line", [174, 1516, 2263, 3048, 3879, 4450, 5180, 6052], GRADE2_TITLES),
+    ("2022 개정 중학교 2학년", "YBM",      "YBM/과학 2(권우진)_공통자료_교과서 PDF.md",     "line", [9, 1568, 2367, 3275, 4122, 4677, 5529, 6171], GRADE2_TITLES),
+    ("2022 개정 중학교 2학년", "천재(임)", "천재(임)/중_과학2(임성숙)_교과서.md",            "line", [279, 1103, 1834, 2584, 3283, 3701, 4458, 5417], GRADE2_TITLES),
+    ("2022 개정 중학교 2학년", "천재(정)", "천재(정)/중_과학2(정대홍)_교과서.md",            "line", [239, 1855, 3167, 4451, 5594, 6429, 7599, 8855], GRADE2_TITLES),
+
+    # 중2 - page 모드 (페이지 마커)
+    ("2022 개정 중학교 2학년", "지학사", "지학사/중등과학_2_교과서(지학사).md",       "page", [13, 47, 95, 135, 167, 193, 229, 267], GRADE2_TITLES),
+    ("2022 개정 중학교 2학년", "비상",   "비상/[비상교육] 중학_과학 2_교과서.md",     "page", [8, 42, 88, 128, 162, 188, 226, 266], GRADE2_TITLES),
+    ("2022 개정 중학교 2학년", "미래엔", "미래엔/미래엔_과학2_교과서_합본.md",        "page", [1, 41, 83, 123, 157, 187, 229, 267], GRADE2_TITLES),
+]
+
 
 def safe(name):
-    """Make a filesystem-safe filename fragment from a Korean unit title."""
     return name.replace(" ", "").replace("/", "_")
 
-for pub, info in PUBLISHERS.items():
-    src = os.path.join(BASE, info["file"])
-    with open(src, "r", encoding="utf-8") as f:
+
+def split_by_lines(md_path, line_starts, titles, out_dir):
+    with open(md_path, "r", encoding="utf-8") as f:
         lines = f.readlines()
-    starts = info["starts"]
-    if len(starts) != len(UNIT_TITLES):
-        raise SystemExit(f"unit count mismatch for {pub}")
-
-    out_dir = os.path.join(OUT, pub)
-    os.makedirs(out_dir, exist_ok=True)
-
-    boundaries = starts + [len(lines) + 1]
-    print(f"=== {pub} (총 {len(lines)}줄) ===")
-    for i, title in enumerate(UNIT_TITLES):
-        s = boundaries[i] - 1   # 1-indexed start → 0-indexed
-        e = boundaries[i+1] - 1 # exclusive end (next unit's start)
+    boundaries = line_starts + [len(lines) + 1]
+    for i, title in enumerate(titles):
+        s = boundaries[i] - 1
+        e = boundaries[i + 1] - 1
         chunk = "".join(lines[s:e])
+        # 페이지 마커가 있을 경우 제거
+        chunk = re.sub(r"<!-- PAGE \d+ -->\n?", "", chunk)
         fname = f"{i+1:02d}_{safe(title)}.md"
         with open(os.path.join(out_dir, fname), "w", encoding="utf-8") as f:
             f.write(chunk)
-        nl = chunk.count("\n")
-        print(f"  {fname}: {len(chunk):>7} chars / {nl:>5} lines")
-    print()
+        print(f"    {fname}: {len(chunk):>7}B / {chunk.count(chr(10)):>5} lines")
+
+
+def split_by_pages(md_path, page_starts, titles, out_dir):
+    with open(md_path, "r", encoding="utf-8") as f:
+        content = f.read()
+    parts = re.split(r"<!-- PAGE (\d+) -->\n?", content)
+    page_to_text = {}
+    for i in range(1, len(parts), 2):
+        page_to_text[int(parts[i])] = parts[i + 1]
+    max_page = max(page_to_text.keys()) if page_to_text else 0
+    boundaries = page_starts + [max_page + 1]
+    for i, title in enumerate(titles):
+        s_page = boundaries[i]
+        e_page = boundaries[i + 1]
+        chunk_parts = [page_to_text.get(p, "") for p in range(s_page, e_page)]
+        chunk = "".join(chunk_parts)
+        fname = f"{i+1:02d}_{safe(title)}.md"
+        with open(os.path.join(out_dir, fname), "w", encoding="utf-8") as f:
+            f.write(chunk)
+        print(f"    {fname}: {len(chunk):>7}B / {chunk.count(chr(10)):>5} lines  (p.{s_page}-{e_page-1})")
+
+
+for grade_dir, pub, md_rel, mode, boundary, titles in JOBS:
+    md_path = os.path.join(BASE, grade_dir, md_rel)
+    out_dir = os.path.join(BASE, grade_dir, "split", pub)
+    if not os.path.exists(md_path):
+        print(f"SKIP (없음): {md_path}")
+        continue
+    os.makedirs(out_dir, exist_ok=True)
+    print(f"\n=== {grade_dir} / {pub} ({mode}) ===")
+    if mode == "line":
+        split_by_lines(md_path, boundary, titles, out_dir)
+    else:
+        split_by_pages(md_path, boundary, titles, out_dir)

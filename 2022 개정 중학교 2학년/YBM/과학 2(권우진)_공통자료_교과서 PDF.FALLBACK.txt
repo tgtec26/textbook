@@ -1,0 +1,1 @@
+PyMuPDF fallback 사용 페이지: [26, 27]

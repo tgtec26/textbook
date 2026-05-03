@@ -73,6 +73,9 @@ def cleanup(raw_path, clean_path):
     with open(raw_path, "r", encoding="utf-8") as f:
         content = f.read()
     content = re.sub(r"!\[.*?\]\(.*?\)", "", content, flags=re.DOTALL)
+    # ASCII 제어 문자 제거 (BEL 등이 한국어 텍스트 사이에 끼어 들어오는 경우)
+    # 단, \t(0x09) \n(0x0A) \r(0x0D)는 보존
+    content = re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]", "", content)
     cleaned = []
     for line in content.splitlines():
         s = line.strip()
