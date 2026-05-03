@@ -1,0 +1,35 @@
+# 원본 자료(저작권 + 대용량) → 구글 드라이브에서 보관, git에는 올리지 않음
+*.pdf
+*.hwp
+*.hwpx
+*.docx
+*.doc
+*.pptx
+*.ppt
+*.xlsx
+*.xls
+*.zip
+*.ai
+*.psd
+*.indd
+*.eps
+*.tif
+*.tiff
+
+# 작업 중간 산출물
+.work/
+*_chunks/
+*_recover/
+test_out/
+__pycache__/
+*.pyc
+
+# 로그
+*.log
+
+# Office/OS 임시·잠금·메타 파일
+~$*
+~*.tmp
+desktop.ini
+.DS_Store
+Thumbs.db
