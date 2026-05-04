@@ -88,29 +88,8 @@ def cleanup(raw_path, clean_path):
     return len(cleaned)
 
 
-def process_pdf(pdf_path, work_dir, chunk_size=50, keep_chunks=False):
-    """단일 PDF 처리. 결과 MD는 PDF 옆에 저장."""
-    base = os.path.splitext(os.path.basename(pdf_path))[0]
-    out_dir = os.path.dirname(os.path.abspath(pdf_path))
-    out_md = os.path.join(out_dir, f"{base}.md")
-    raw_md = os.path.join(out_dir, f"{base}.raw.md")
-    fallback_report = os.path.join(out_dir, f"{base}.FALLBACK.txt")
-    chunks_dir = os.path.join(work_dir, base)
-
-    log.info(f"=== {os.path.basename(pdf_path)} ===")
-
-    total = get_page_count(pdf_path)
-    log.info(f"  총 페이지: {total}")
-
-    if os.path.exists(chunks_dir):
-        shutil.rmtree(chunks_dir)
-    os.makedirs(chunks_dir)
-
-    pending = [(s, min(s + chunk_size - 1, total)) for s in range(1, total + 1, chunk_size)]
-    successful = []
-    fallback_pages = []
-    permanent_failures = []
-
+def _run_pending(pdf_path, pending, chunks_dir, successful, fallback_pages, permanent_failures):
+    """청크 분할 방식으로 pending 목록 처리."""
     while pending:
         start, end = pending.pop(0)
         label = f"p{start:04d}-{end:04d}"
@@ -121,7 +100,6 @@ def process_pdf(pdf_path, work_dir, chunk_size=50, keep_chunks=False):
             log.info(f"  {label} OK {time.time()-t0:.1f}s {os.path.getsize(md):>7}B")
             successful.append((start, md))
             continue
-
         log.warning(f"  {label} FAIL after {time.time()-t0:.1f}s — 분할")
         size = end - start + 1
         if size > 10:
@@ -140,6 +118,79 @@ def process_pdf(pdf_path, work_dir, chunk_size=50, keep_chunks=False):
             else:
                 log.error(f"  p{p:04d} 어떤 방법으로도 복구 실패")
                 permanent_failures.append(p)
+    return successful, fallback_pages, permanent_failures
+
+
+def pymupdf_all_pages(pdf_path, total, chunks_dir):
+    """전체 페이지를 PyMuPDF로 한 번에 추출."""
+    if fitz is None:
+        return [], list(range(1, total + 1))
+    log.info(f"  → PyMuPDF 전체 추출 모드 ({total}페이지)")
+    successful = []
+    permanent_failures = []
+    with fitz.open(pdf_path) as doc:
+        for p in range(1, total + 1):
+            fb_md = os.path.join(chunks_dir, f"p{p:04d}_fallback.md")
+            try:
+                text = doc.load_page(p - 1).get_text("text")
+                with open(fb_md, "w", encoding="utf-8") as f:
+                    f.write(text)
+                successful.append((p, fb_md))
+            except Exception:
+                log.error(f"  p{p:04d} PyMuPDF 실패")
+                permanent_failures.append(p)
+    log.info(f"  PyMuPDF 추출 완료: {len(successful)}페이지 성공")
+    return successful, permanent_failures
+
+
+def process_pdf(pdf_path, work_dir, chunk_size=50, keep_chunks=False):
+    """단일 PDF 처리. 결과 MD는 PDF 옆에 저장."""
+    base = os.path.splitext(os.path.basename(pdf_path))[0]
+    out_dir = os.path.dirname(os.path.abspath(pdf_path))
+    out_md = os.path.join(out_dir, f"{base}.md")
+    raw_md = os.path.join(out_dir, f"{base}.raw.md")
+    fallback_report = os.path.join(out_dir, f"{base}.FALLBACK.txt")
+    chunks_dir = os.path.join(work_dir, base)
+
+    log.info(f"=== {os.path.basename(pdf_path)} ===")
+
+    total = get_page_count(pdf_path)
+    log.info(f"  총 페이지: {total}")
+
+    if os.path.exists(chunks_dir):
+        shutil.rmtree(chunks_dir)
+    os.makedirs(chunks_dir)
+
+    # 첫 청크와 첫 서브청크(10p)가 모두 실패하면 즉시 PyMuPDF 전체 모드로 전환
+    first_chunk_end = min(chunk_size, total)
+    t0 = time.time()
+    first_md = extract_chunk(pdf_path, 1, first_chunk_end, os.path.join(chunks_dir, f"p0001-{first_chunk_end:04d}"))
+    if not first_md:
+        log.warning(f"  p0001-{first_chunk_end:04d} FAIL after {time.time()-t0:.1f}s — 서브청크 시도")
+        sub_end = min(10, total)
+        t1 = time.time()
+        sub_md = extract_chunk(pdf_path, 1, sub_end, os.path.join(chunks_dir, "p0001-sub"))
+        if not sub_md:
+            log.warning(f"  서브청크도 FAIL after {time.time()-t1:.1f}s — PyMuPDF 전체 모드로 전환")
+            successful, permanent_failures = pymupdf_all_pages(pdf_path, total, chunks_dir)
+            fallback_pages = list(range(1, total + 1))
+        else:
+            # 서브청크 성공 → 기존 청크 분할 방식으로 진행
+            log.info(f"  서브청크 OK — 10p 단위로 계속 진행")
+            successful = [(1, sub_md)]
+            fallback_pages = []
+            permanent_failures = []
+            pending = [(s, min(s + 9, total)) for s in range(sub_end + 1, total + 1, 10)]
+            successful, fallback_pages, permanent_failures = _run_pending(
+                pdf_path, pending, chunks_dir, successful, fallback_pages, permanent_failures)
+    else:
+        log.info(f"  p0001-{first_chunk_end:04d} OK {time.time()-t0:.1f}s {os.path.getsize(first_md):>7}B")
+        successful = [(1, first_md)]
+        fallback_pages = []
+        permanent_failures = []
+        pending = [(s, min(s + chunk_size - 1, total)) for s in range(first_chunk_end + 1, total + 1, chunk_size)]
+        successful, fallback_pages, permanent_failures = _run_pending(
+            pdf_path, pending, chunks_dir, successful, fallback_pages, permanent_failures)
 
     successful.sort(key=lambda x: x[0])
 
