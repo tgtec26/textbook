@@ -8,9 +8,11 @@ PDF -> Markdown 안전 추출 파이프라인.
 - cleanup 전 raw 산출물(`*.raw.md`)을 보존.
 - 어떤 페이지가 PyMuPDF fallback으로 처리됐는지 `*.FALLBACK.txt`에 기록.
 - 정리 규칙: 이미지 태그 제거, 빈 줄 제거, 단어 1개뿐인 줄 제거.
+- `--merge-lines`(옵션): 종결부호로 끝나지 않은 줄을 다음 줄과 이어붙여
+  PDF의 시각 줄바꿈으로 끊긴 한글 어절을 복원한다.
 
 사용:
-    python process_pdf.py <PDF 또는 디렉터리> [--chunk-size 50] [--keep-chunks]
+    python process_pdf.py <PDF 또는 디렉터리> [--chunk-size 50] [--keep-chunks] [--merge-lines]
 """
 import argparse
 import glob
@@ -69,7 +71,27 @@ def fallback_pymupdf(pdf_path, page_num, out_path):
         return None
 
 
-def cleanup(raw_path, clean_path):
+_TERMINATOR_RE = re.compile(r'[.!?…:;)\]"\'』」、,]$')
+_MARKER_RE = re.compile(
+    r'^(#+\s|[-*•]\s|\d+[.)]\s|[①②③④⑤⑥⑦⑧⑨⑩]|'
+    r'[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ][.\s]|\(\s*[가-힣\d]+\s*\)|\||<|\[)'
+)
+
+
+def merge_soft_breaks(lines):
+    # 한 줄이 종결부호로 끝나지 않고 다음 줄이 목록/제목 마커로 시작하지 않으면
+    # 두 줄을 공백 없이 이어붙인다 — 한글 어절 중간 줄바꿈("익\n히고") 복원용.
+    # 어절 경계 줄바꿈("~으로\n성장~")에서는 공백 한 칸이 누락될 수 있음.
+    result = []
+    for line in lines:
+        if result and not _TERMINATOR_RE.search(result[-1]) and not _MARKER_RE.match(line):
+            result[-1] = result[-1] + line
+        else:
+            result.append(line)
+    return result
+
+
+def cleanup(raw_path, clean_path, merge_lines=False):
     with open(raw_path, "r", encoding="utf-8") as f:
         content = f.read()
     content = re.sub(r"!\[.*?\]\(.*?\)", "", content, flags=re.DOTALL)
@@ -83,6 +105,8 @@ def cleanup(raw_path, clean_path):
             continue
         if len(s.split()) > 1:
             cleaned.append(s)
+    if merge_lines:
+        cleaned = merge_soft_breaks(cleaned)
     with open(clean_path, "w", encoding="utf-8") as f:
         f.write("\n".join(cleaned) + "\n")
     return len(cleaned)
@@ -143,7 +167,7 @@ def pymupdf_all_pages(pdf_path, total, chunks_dir):
     return successful, permanent_failures
 
 
-def process_pdf(pdf_path, work_dir, chunk_size=50, keep_chunks=False):
+def process_pdf(pdf_path, work_dir, chunk_size=50, keep_chunks=False, merge_lines=False):
     """단일 PDF 처리. 결과 MD는 PDF 옆에 저장."""
     base = os.path.splitext(os.path.basename(pdf_path))[0]
     out_dir = os.path.dirname(os.path.abspath(pdf_path))
@@ -201,7 +225,7 @@ def process_pdf(pdf_path, work_dir, chunk_size=50, keep_chunks=False):
                 fout.write("\n")
     log.info(f"  raw -> {raw_md} ({os.path.getsize(raw_md)}B)")
 
-    n_lines = cleanup(raw_md, out_md)
+    n_lines = cleanup(raw_md, out_md, merge_lines=merge_lines)
     log.info(f"  cleaned -> {out_md} ({os.path.getsize(out_md)}B / {n_lines} lines)")
 
     if fallback_pages or permanent_failures:
@@ -235,6 +259,8 @@ def main():
     parser.add_argument("--chunk-size", type=int, default=50, help="초기 청크 크기 (페이지 수, 기본 50)")
     parser.add_argument("--work-dir", default=None, help="중간 청크 작업 디렉터리 (기본: .work/)")
     parser.add_argument("--keep-chunks", action="store_true", help="중간 청크 보존 (디버그용)")
+    parser.add_argument("--merge-lines", action="store_true",
+                        help="시각 줄바꿈을 논리 문단으로 병합 (한글 어절 중간 끊김 복원, grep 검색에 유리)")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
@@ -250,7 +276,8 @@ def main():
     log.info(f"처리 대상 PDF: {len(pdfs)}개")
     for pdf in pdfs:
         try:
-            process_pdf(pdf, work_dir, chunk_size=args.chunk_size, keep_chunks=args.keep_chunks)
+            process_pdf(pdf, work_dir, chunk_size=args.chunk_size,
+                        keep_chunks=args.keep_chunks, merge_lines=args.merge_lines)
         except Exception:
             log.exception(f"실패: {pdf}")
 

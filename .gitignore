@@ -23,6 +23,9 @@
 test_out/
 __pycache__/
 *.pyc
+.venv/
+venv/
+.claude/
 
 # 로그
 *.log
