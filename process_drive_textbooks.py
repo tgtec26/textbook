@@ -232,6 +232,49 @@ def crop_to_md(page, clip=None) -> str:
     return "\n".join(body)
 
 
+def crop_textbook_page_to_md(page, clip=None, side: int | None = None) -> str:
+    """Return textbook reading order: header, main column, then helper column."""
+    h = page.rect.height
+    page_w = (clip.x1 - clip.x0) if clip else page.rect.width
+    lines = []
+    for line in page_lines(page, clip):
+        if is_noise_line(line):
+            continue
+        if line["y0"] > h * 0.92 and likely_page_number(line["text"]) is not None:
+            continue
+        lines.append(line)
+
+    if side is None:
+        ordered = sorted(lines, key=lambda item: (round(item["y0"] / 3) * 3, item["x0"]))
+        return "\n".join(line["text"] for line in ordered)
+
+    zones = {"header": [], "main": [], "side": []}
+    for line in lines:
+        if side == 0 and line["x0"] < page_w * 0.28:
+            zones["side"].append(line)
+        elif side == 1 and line["x1"] > page_w * 0.72:
+            zones["side"].append(line)
+        elif line["y0"] < h * 0.12:
+            zones["header"].append(line)
+        else:
+            zones["main"].append(line)
+
+    def ordered_text(zone_lines):
+        return [
+            line["text"]
+            for line in sorted(zone_lines, key=lambda item: (round(item["y0"] / 3) * 3, item["x0"]))
+        ]
+
+    body = []
+    body.extend(ordered_text(zones["header"]))
+    body.extend(ordered_text(zones["main"]))
+    side_text = ordered_text(zones["side"])
+    if side_text:
+        body.append("### 보조단")
+        body.extend(side_text)
+    return "\n".join(body)
+
+
 def convert_pdf(pdf_path: Path, mode: str, offset: int) -> str:
     doc = fitz.open(pdf_path)
     chunks = [f"# {pdf_path.stem}", f"> 변환 기준: {mode}, offset={offset}"]
@@ -243,7 +286,7 @@ def convert_pdf(pdf_path: Path, mode: str, offset: int) -> str:
                 logical = logical_page_number(physical, side, mode, offset)
                 if logical < 0:
                     continue
-                md = crop_to_md(page, clip).strip()
+                md = crop_textbook_page_to_md(page, clip, side).strip()
                 if md:
                     chunks.append(f"## {logical}쪽")
                     chunks.append(md)
@@ -251,7 +294,7 @@ def convert_pdf(pdf_path: Path, mode: str, offset: int) -> str:
             logical = logical_page_number(physical, 0, mode, offset)
             if logical < 0:
                 continue
-            md = crop_to_md(page).strip()
+            md = crop_textbook_page_to_md(page).strip()
             if md:
                 chunks.append(f"## {logical}쪽")
                 chunks.append(md)
