@@ -24,9 +24,7 @@ Local Mac Studio work:
 
 ```sh
 ./setup_mac.sh
-export PATH="/opt/homebrew/opt/openjdk/bin:$PATH"
-. .venv-opendataloader/bin/activate
-python convert_local.py --input "/path/to/pdf_root" --output "/path/to/output_md" --reports "/path/to/reports"
+./run_local_conversion.sh "/path/to/pdf_root" "/path/to/output_md" "/path/to/reports"
 ```
 
 See [REPRODUCIBILITY.md](REPRODUCIBILITY.md) for local work.

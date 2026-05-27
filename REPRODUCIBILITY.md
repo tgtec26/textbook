@@ -32,8 +32,6 @@ cd textbook-pdf-md-converter
 ```sh
 cd textbook-pdf-md-converter
 git pull
-export PATH="/opt/homebrew/opt/openjdk/bin:$PATH"
-. .venv-opendataloader/bin/activate
 ```
 
 ## 로컬 PDF 폴더 구조
@@ -52,7 +50,30 @@ export PATH="/opt/homebrew/opt/openjdk/bin:$PATH"
 
 ## 변환 실행
 
+한 줄 실행:
+
 ```sh
+./run_local_conversion.sh \
+  "/Volumes/Textbooks/pdf" \
+  "/Volumes/Textbooks/output_md" \
+  "/Volumes/Textbooks/reports"
+```
+
+기존 결과를 지우지 않고 실행:
+
+```sh
+./run_local_conversion.sh \
+  "/Volumes/Textbooks/pdf" \
+  "/Volumes/Textbooks/output_md" \
+  "/Volumes/Textbooks/reports" \
+  --keep-output
+```
+
+직접 실행:
+
+```sh
+export PATH="/opt/homebrew/opt/openjdk/bin:$PATH"
+. .venv-opendataloader/bin/activate
 python convert_local.py \
   --input "/Volumes/Textbooks/pdf" \
   --output "/Volumes/Textbooks/output_md" \
@@ -69,6 +90,39 @@ python convert_local.py \
   --reports "/Volumes/Textbooks/reports" \
   --start-at "역사/비상_중학교_역사1_이병인_교과서"
 ```
+
+## AI에게 맡기는 법
+
+직장 Mac Studio에서 Codex, Claude Code 같은 AI가 터미널을 사용할 수 있으면 직접 명령을 칠 필요 없다.
+
+AI에게 아래처럼 요청한다.
+
+```text
+이 저장소에서 로컬 교과서 PDF 변환 작업을 실행해줘.
+PDF 원본 폴더는 "/Volumes/Textbooks/pdf"이고,
+결과는 "/Volumes/Textbooks/output_md"에 저장해줘.
+리포트는 "/Volumes/Textbooks/reports"에 저장해줘.
+REPRODUCIBILITY.md 절차를 따라 환경 확인 후 실행해줘.
+기존 결과는 지워도 돼.
+```
+
+AI에게 꼭 알려줄 것:
+
+- PDF 원본 폴더
+- 결과 저장 폴더
+- 리포트 저장 폴더
+- 기존 결과를 지워도 되는지
+- 변환 후 코드 변경을 GitHub에 push할지
+
+AI가 해야 할 일:
+
+- `git pull`
+- 필요하면 `./setup_mac.sh`
+- `./run_local_conversion.sh "<PDF폴더>" "<결과폴더>" "<리포트폴더>"`
+- 결과 파일 수 확인
+- `reports/pdf_checksums.tsv` 생성 확인
+- 빈줄 검사
+- 실패 PDF가 있으면 원인 보고
 
 ## 결과 위치
 
