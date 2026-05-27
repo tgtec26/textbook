@@ -1,6 +1,8 @@
 # Textbook PDF to Markdown Workflow
 
-이 문서는 다른 Mac에서 같은 작업을 재현하기 위한 절차이다.
+이 문서는 Google Drive 기반 작업을 재현하기 위한 절차이다.
+
+로컬 Mac Studio의 PDF 폴더를 직접 변환할 때는 `REPRODUCIBILITY.md`와 `convert_local.py`를 사용한다.
 
 ## 목표
 
