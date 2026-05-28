@@ -154,7 +154,7 @@ def page_lines(page, clip=None):
 
 def likely_page_number(text: str) -> int | None:
     text = clean(text)
-    nums = re.findall(r"(?<![A-Za-z0-9])([1-9][0-9]{0,2})(?![A-Za-z0-9])", text)
+    nums = re.findall(r"(?<![A-Za-z0-9])0*([1-9][0-9]{0,2})(?![A-Za-z0-9])", text)
     if not nums:
         return None
     nums_i = [int(n) for n in nums if 1 <= int(n) <= 450]
@@ -245,8 +245,16 @@ def crop_textbook_page_to_md(page, clip=None, side: int | None = None) -> str:
         lines.append(line)
 
     if side is None:
-        ordered = sorted(lines, key=lambda item: (round(item["y0"] / 3) * 3, item["x0"]))
-        return "\n".join(line["text"] for line in ordered)
+        body_lines = [line for line in lines if line["y0"] >= h * 0.12]
+        left_side = [line for line in body_lines if line["x1"] < page_w * 0.30]
+        right_side = [line for line in body_lines if line["x0"] > page_w * 0.70]
+        if len(right_side) >= 3 and len(right_side) > len(left_side):
+            side = 1
+        elif len(left_side) >= 3 and len(left_side) > len(right_side):
+            side = 0
+        else:
+            ordered = sorted(lines, key=lambda item: (round(item["y0"] / 3) * 3, item["x0"]))
+            return "\n".join(line["text"] for line in ordered)
 
     zones = {"header": [], "main": [], "side": []}
     for line in lines:

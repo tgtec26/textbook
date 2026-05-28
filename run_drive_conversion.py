@@ -30,6 +30,29 @@ ODL_VENV = Path(".venv-opendataloader/bin/activate")
 JAVA_BIN = Path("/opt/homebrew/opt/openjdk/bin")
 
 
+MANUAL_UNIT_RANGES = {
+    "비상_중학교_과학1_임태훈_교과서": [
+        ("과학과 인류의 지속가능한 삶", 12, 39),
+        ("생물의 구성과 다양성", 40, 79),
+        ("열", 80, 109),
+        ("물질의 상태 변화", 110, 153),
+        ("힘의 작용", 154, 193),
+        ("기체의 성질", 194, 221),
+        ("태양계", 222, 253),
+    ],
+    "비상_중학교_과학2_임태훈_교과서": [
+        ("물질의 특성", 8, 41),
+        ("지권의 변화", 42, 87),
+        ("빛과 파동", 88, 127),
+        ("물질의 구성", 128, 161),
+        ("식물과 에너지", 162, 187),
+        ("동물과 에너지", 188, 225),
+        ("전기와 자기", 226, 265),
+        ("별과 우주", 266, 299),
+    ],
+}
+
+
 UNIT_CONFIG = {
     "미래엔_중학교_과학1_김태일_교과서": [
         ("과학과 인류의 지속가능한 삶", 14),
@@ -191,7 +214,19 @@ def clean_text(text: str) -> str:
         if re.fullmatch(r"[0-9]{1,2}", line) and lines and lines[-1].startswith("## "):
             continue
         lines.append(line)
-    return "\n".join(lines).strip() + "\n"
+    text = "\n".join(lines).strip()
+    if not text:
+        return "\n"
+    parts = re.split(r"(^##\s+\d+쪽\s*$)", text, flags=re.M)
+    if len(parts) > 1:
+        cleaned = [parts[0].strip()]
+        for idx in range(1, len(parts), 2):
+            heading = parts[idx].strip()
+            body = parts[idx + 1].strip() if idx + 1 < len(parts) else ""
+            if body:
+                cleaned.extend([heading, body])
+        text = "\n".join(part for part in cleaned if part).strip()
+    return text + "\n"
 
 
 def page_blocks(md: str) -> dict[int, str]:
@@ -245,7 +280,8 @@ def convert_with_opendataloader(pdf_path: Path, out_dir: Path) -> str:
             f'--pages {start}-{end} '
             f'--image-output off --quiet'
         )
-        proc = subprocess.run(cmd, shell=True, executable="/bin/zsh", timeout=1800, text=True, capture_output=True)
+        timeout = int(os.environ.get("ODL_PAGE_TIMEOUT_SECONDS", "1800"))
+        proc = subprocess.run(cmd, shell=True, executable="/bin/zsh", timeout=timeout, text=True, capture_output=True)
         if proc.returncode != 0:
             if start == end:
                 fallback = clean_text(doc[start - 1].get_text("text"))
@@ -275,14 +311,64 @@ def convert_with_opendataloader(pdf_path: Path, out_dir: Path) -> str:
     mode, offset, _ = detect_mode_and_offset(pdf_path)
     chunks = [f"# {pdf_path.stem}", "> 변환 기준: OpenDataLoader PDF JSON"]
     for physical in range(1, page_count + 1):
-        logical = logical_page_number(physical, 0, mode, offset)
-        if logical < 0:
-            continue
-        body = opendataloader_page_to_md(page_items.get(physical, []), doc[physical - 1].rect, logical)
-        if body.strip():
+        for logical, body in opendataloader_physical_page_to_chunks(
+            page_items.get(physical, []),
+            doc[physical - 1].rect,
+            mode,
+            offset,
+            physical,
+        ):
             chunks.append(f"## {logical}쪽")
             chunks.append(body)
     return clean_text("\n".join(chunks))
+
+
+def opendataloader_physical_page_to_chunks(
+    items: list[dict],
+    rect,
+    mode: str,
+    offset: int,
+    physical: int,
+) -> list[tuple[int, str]]:
+    if mode == "two-up":
+        clips = [fitz.Rect(0, 0, rect.width / 2, rect.height), fitz.Rect(rect.width / 2, 0, rect.width, rect.height)]
+        chunks = []
+        for side, clip in enumerate(clips):
+            logical = logical_page_number(physical, side, mode, offset)
+            if logical < 0:
+                continue
+            half_rect = fitz.Rect(0, 0, clip.width, clip.height)
+            body = opendataloader_page_to_md(opendataloader_items_for_clip(items, clip), half_rect, logical).strip()
+            if body:
+                chunks.append((logical, body))
+        return chunks
+
+    logical = logical_page_number(physical, 0, mode, offset)
+    if logical < 0:
+        return []
+    body = opendataloader_page_to_md(items, rect, logical).strip()
+    return [(logical, body)] if body else []
+
+
+def opendataloader_items_for_clip(items: list[dict], clip) -> list[dict]:
+    clipped = []
+    for item in items:
+        bbox = item.get("bounding box")
+        if not bbox or len(bbox) != 4:
+            continue
+        x0, y0, x1, y1 = [float(v) for v in bbox]
+        cx = (x0 + x1) / 2
+        if not (clip.x0 <= cx < clip.x1):
+            continue
+        copied = dict(item)
+        copied["bounding box"] = [
+            max(x0, clip.x0) - clip.x0,
+            y0,
+            min(x1, clip.x1) - clip.x0,
+            y1,
+        ]
+        clipped.append(copied)
+    return clipped
 
 
 def opendataloader_page_to_md(items: list[dict], rect, logical_page: int) -> str:
@@ -355,6 +441,9 @@ def should_skip_opendataloader_item(content: str, bbox: list[float], page_w: flo
 
 def convert_book(pdf_path: Path, book_dir: Path) -> tuple[str, dict]:
     mode, offset, analysis = detect_mode_and_offset(pdf_path)
+    if pdf_path.stem in MANUAL_UNIT_RANGES:
+        mode, offset = "one-up", 0
+        analysis["manual_page_numbering"] = "physical_pdf_pages"
     broken = has_garbled_text(pdf_path)
     if broken:
         md = convert_with_opendataloader(pdf_path, book_dir / "_opendataloader")
@@ -409,6 +498,18 @@ def adjusted_ranges(stem: str, md: str) -> tuple[list[tuple[str, int, int]], lis
     pages = sorted(blocks)
     if not pages:
         return [], []
+    if stem in MANUAL_UNIT_RANGES:
+        ranges = [(title, start, end) for title, start, end in MANUAL_UNIT_RANGES[stem] if start in blocks]
+        checks = [
+            {
+                "title": title,
+                "chosen_start": start,
+                "chosen_end": end,
+                "manual": "physical_pdf_pages",
+            }
+            for title, start, end in ranges
+        ]
+        return ranges, checks
     configured = UNIT_CONFIG.get(stem)
     if not configured:
         return [(stem, pages[0], pages[-1])], [{"title": stem, "reason": "no_config"}]
