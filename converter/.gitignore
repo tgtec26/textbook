@@ -1,0 +1,19 @@
+.DS_Store
+__pycache__/
+*.pyc
+
+.venv*/
+venv/
+
+# Source PDFs and generated textbook text are not committed.
+drive_work/
+drive_downloads/
+*.pdf
+textbook.md
+sample_*.md
+units/
+unit_page_ranges.md
+drive_file_manifest.tsv
+
+# Local reports/logs.
+*.log
