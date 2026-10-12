@@ -77,19 +77,25 @@ class Line:
         return len(compact(self.text))
 
 
-def collect_lines(page) -> list[Line]:
+def spread_mode(doc) -> bool:
+    """쪽 가로세로 비율의 중앙값으로 2쪽 펼침 여부를 판정한다(표지만 가로로 긴 책을 펼침으로 오인하지 않도록)."""
+    ratios = sorted(doc[i].rect.width / doc[i].rect.height for i in range(len(doc)))
+    return ratios[len(ratios) // 2] > 1.45
+
+
+def collect_lines(page, clip=None) -> list[Line]:
     out = []
     for block in page.get_text("dict", flags=fitz.TEXTFLAGS_TEXT)["blocks"]:
         if block["type"] != 0:
             continue
         for raw in block["lines"]:
             line = Line(raw)
-            if line.text.strip():
+            if line.text.strip() and (clip is None or clip.contains(fitz.Point(line.cx, line.cy))):
                 out.append(line)
     return out
 
 
-def figure_regions(page, lines: list[Line], body) -> list[tuple]:
+def figure_regions(page, lines: list[Line], body, clip=None) -> list[tuple]:
     """그림·지도 후보 영역. 안에 든 글자가 짧은 조각 위주일 때만 '그림 속 글자'로 취급한다."""
     cands = []
     for img in page.get_image_info():
@@ -99,6 +105,8 @@ def figure_regions(page, lines: list[Line], body) -> list[tuple]:
     for r in page.cluster_drawings():
         if r.get_area() >= 6000:
             cands.append(fitz.Rect(r))
+    if clip is not None:
+        cands = [r for r in cands if clip.contains(fitz.Point((r.x0 + r.x1) / 2, (r.y0 + r.y1) / 2))]
     regions = []
     for r in cands:
         inside = [l for l in lines if r.contains(fitz.Point(l.cx, l.cy)) and not l.label]
@@ -441,8 +449,8 @@ def assemble_group(lines: list[Line], body, bounds=None) -> list[str]:
     return out
 
 
-def convert_page(page, report: dict):
-    lines = collect_lines(page)
+def convert_page(page, report: dict, clip=None):
+    lines = collect_lines(page, clip)
     h, w = page.rect.height, page.rect.width
     body = body_style(lines)
     body_size = body[1] if body else 10.0
@@ -455,7 +463,7 @@ def convert_page(page, report: dict):
 
     # 그림 속 글자
     fig_text = []
-    for _, items in figure_regions(page, live, body):
+    for _, items in figure_regions(page, live, body, clip):
         items = [l for l in items if l.role != "figure"]
         for l in items:
             l.role = "figure"
@@ -497,7 +505,17 @@ def fragmented(page: dict) -> bool:
 def convert(pdf_path: Path, start_label: int | None = None):
     doc = fitz.open(pdf_path)
     report = {"pdf": pdf_path.name, "pages": len(doc), "dropped": {}, "dropped_samples": {}, "unlabeled_pages": []}
-    pages = [convert_page(doc[i], report) for i in range(len(doc))]
+    if spread_mode(doc):
+        # 2쪽 펼침: 가운데에서 좌·우 반쪽으로 나눠 반쪽마다 한 쪽처럼 처리한다
+        report["spread"] = True
+        pages = []
+        for i in range(len(doc)):
+            r = doc[i].rect
+            mid = r.width / 2
+            for clip in (fitz.Rect(0, 0, mid, r.height), fitz.Rect(mid, 0, r.width, r.height)):
+                pages.append(convert_page(doc[i], report, clip))
+    else:
+        pages = [convert_page(doc[i], report) for i in range(len(doc))]
     report["review_pages"] = [i + 1 for i, p in enumerate(pages) if fragmented(p)]
     report["audit_mismatch"] = {i + 1: p["audit"] for i, p in enumerate(pages) if abs(p["audit"]) > 4}
     # 쪽 번호 보정: 번호가 없는 쪽은 앞 쪽 + 1

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import fitz
 
-from convert_v2 import convert
+from convert_v2 import convert, spread_mode
 
 
 def justify(text: str, width: float = 330.0, size: float = 10.7) -> str:
@@ -83,6 +83,45 @@ class ConvertV2Test(unittest.TestCase):
 
     def test_no_chars_lost_or_duplicated(self):
         self.assertEqual(self.report["audit_mismatch"], {})
+
+
+def make_spread_pdf(path: Path):
+    """가로로 긴 쪽(2쪽 펼침) 2장 + 세로 표지 1장: 왼쪽 반이 34·36쪽, 오른쪽 반이 35·37쪽이다."""
+    doc = fitz.open()
+    doc.new_page(width=624, height=794)
+    for left, right in ((34, 35), (36, 37)):
+        page = doc.new_page(width=1248, height=794)
+        for k, (n, name) in enumerate(((left, "왼쪽"), (right, "오른쪽"))):
+            x = 85 + k * 624
+            for i in range(6):
+                page.insert_text((x, 120 + i * 21), f"{name} {n}쪽 본문 문장 {i} 입니다 가나다라마바사", fontname="korea", fontsize=10.7)
+            page.insert_text((x + 380, 745), str(n), fontname="korea", fontsize=8)
+    doc.save(path)
+
+
+class SpreadTest(unittest.TestCase):
+    def test_spread_pdf_splits_into_left_and_right_pages_in_order(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pdf = Path(tmp) / "s.pdf"
+            make_spread_pdf(pdf)
+            doc = fitz.open(pdf)
+            self.assertTrue(spread_mode(doc))
+            md, report = convert(pdf)
+        self.assertTrue(report["spread"])
+        heads = [md.index(f"## {n}쪽") for n in (34, 35, 36, 37)]
+        self.assertEqual(heads, sorted(heads))
+        left, right = md.split("## 35쪽")[0], md.split("## 35쪽")[1].split("## 36쪽")[0]
+        self.assertIn("왼쪽 34쪽", left)
+        self.assertNotIn("오른쪽", left)
+        self.assertIn("오른쪽 35쪽", right)
+        self.assertNotIn("왼쪽", right)
+
+    def test_single_wide_cover_is_not_a_spread(self):
+        doc = fitz.open()
+        doc.new_page(width=1248, height=794)
+        for _ in range(5):
+            doc.new_page(width=624, height=794)
+        self.assertFalse(spread_mode(doc))
 
 
 if __name__ == "__main__":
