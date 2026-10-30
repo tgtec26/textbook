@@ -124,5 +124,22 @@ class SpreadTest(unittest.TestCase):
         self.assertFalse(spread_mode(doc))
 
 
+class PageLabelTest(unittest.TestCase):
+    def test_bare_number_wins_over_numbered_section_title_in_footer(self):
+        # 단원 첫 펼침 2쪽은 번호가 없고, 셋째 쪽 하단에는 쪽 번호와 "01 중단원" 머리말이 함께 있다
+        doc = fitz.open()
+        for _ in range(2):
+            doc.new_page(width=624, height=794).insert_text((85, 120), "단원 도입", fontname="korea", fontsize=10.7)
+        page = doc.new_page(width=624, height=794)
+        page.insert_text((85, 120), "본문", fontname="korea", fontsize=10.7)
+        page.insert_text((60, 752), "01 유전자발현 과정", fontname="korea", fontsize=7)
+        page.insert_text((540, 760), "57", fontname="korea", fontsize=8)
+        with tempfile.TemporaryDirectory() as tmp:
+            pdf = Path(tmp) / "label.pdf"
+            doc.save(pdf)
+            md, _ = convert(pdf)
+        self.assertEqual([l for l in md.splitlines() if l.startswith("## ")], ["## 55쪽", "## 56쪽", "## 57쪽"])
+
+
 if __name__ == "__main__":
     unittest.main()

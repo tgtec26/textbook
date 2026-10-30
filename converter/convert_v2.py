@@ -202,7 +202,10 @@ def dedupe_headings(lines: list[Line]):
 def page_label(lines: list[Line], page_h: float):
     """쪽 하단에서 쪽 번호를 찾는다. 찾으면 해당 줄에 drop 표시."""
     found = None
-    for l in sorted([l for l in lines if l.y0 > page_h * 0.92 and not l.drop], key=lambda l: l.y0):
+    # 숫자만 있는 줄을 먼저 본다("01 중단원 이름" 같은 하단 머리말의 번호를 쪽 번호로 잡지 않도록)
+    foot = sorted([l for l in lines if l.y0 > page_h * 0.92 and not l.drop],
+                  key=lambda l: (not re.fullmatch(r"\s*\d{1,3}\s*", l.text), l.y0))
+    for l in foot:
         m = re.search(r"(?:^|\s)(\d{1,3})\s*$", l.text) or re.match(r"^(\d{1,3})\s", l.text)
         if m and found is None:
             found = int(m.group(1))
@@ -524,9 +527,11 @@ def convert(pdf_path: Path, start_label: int | None = None):
         if lab is None:
             if i and labels[i - 1] is not None:
                 labels[i] = labels[i - 1] + 1
-            elif i + 1 < len(labels) and labels[i + 1] is not None:
-                labels[i] = labels[i + 1] - 1
             report["unlabeled_pages"].append(i + 1)
+    # 앞에 번호가 없는 쪽(단원 도입 펼침 등)은 뒤 쪽 번호에서 거꾸로 채운다
+    for i in range(len(labels) - 2, -1, -1):
+        if labels[i] is None and labels[i + 1] is not None:
+            labels[i] = labels[i + 1] - 1
     chunks = [f"# {pdf_path.stem}", ""]
     for p, lab in zip(pages, labels):
         chunks.append(f"## {lab}쪽" if lab is not None else "## ?쪽")
